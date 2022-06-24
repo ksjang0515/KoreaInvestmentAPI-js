@@ -1,7 +1,5 @@
-import Websocket from "ws";
-import "request";
-import "url";
 import axios from "axios";
+import io from "socket.io-client";
 
 class KoreaInvestmentAPI {
   constructor(APIKEY, SECRETKEY, accNumFront, accNumBack, options = {}) {
@@ -23,15 +21,12 @@ class KoreaInvestmentAPI {
     };
 
     this.options = Object.assign(default_options, options);
-    const isTest = this.options.test;
-    this.options.domain = isTest ? testnet : base;
+    this.isTest = this.options.test;
+    this.options.domain = this.isTest ? testnet : base;
 
-    const res = (async () => await issueToken())();
-    setToken(res.body.access_token, res.body.expire_in);
-
-    const appkey = this.options.APIKEY;
-    const appsecret = this.options.SECRETKEY;
-    const domain = this.options.domain;
+    this.appkey = this.options.APIKEY;
+    this.appsecret = this.options.SECRETKEY;
+    this.domain = this.options.domain;
   }
 
   isTokenExpired() {
@@ -39,103 +34,212 @@ class KoreaInvestmentAPI {
   }
 
   setToken(_token, _expire_in) {
-    KoreaInvest.options.token = _token;
-    KoreaInvest.options.tokenExpiration =
+    this.options.token = _token;
+    this.options.tokenExpiration =
       new Date().getTime() + (_expire_in - 3600) * 1000;
   }
 
-  request(opt) {
-    return axios(opt).then((res) => ({ header: res.headers, body: res.body }));
+  async getToken() {
+    if (this.isTokenExpired() || this.options.token === undefined) {
+      const res = await this.issueToken();
+      this.setToken(res.body.access_token, res.body.expire_in);
+    }
+    return this.options.token;
+  }
+
+  request(
+    opt,
+    addKey = true,
+    addHash = false,
+    addAccNum = true,
+    addContentType = true,
+    addAuth = true
+  ) {
+    if (addKey)
+      opt.headers = Object.assign(opt.data, {
+        appkey: this.options.APIKEY,
+        appsecret: this.options.SECRETKEY,
+      });
+
+    if (addAccNum)
+      opt.data = Object.assign(opt.data, {
+        CANO: this.options.accNumFront,
+        ACNT_PRDT_CD: this.options.accNumBack,
+      });
+
+    if (addHash) {
+      const hash = this.getHashkey();
+      opt.headers = Object.assign(opt.headers, { hashkey: hash });
+    }
+
+    if (addContentType)
+      opt.headers = Object.assign(opt.headers, {
+        "content-type": "application/json",
+      });
+
+    if (addAuth) {
+      const token = this.getToken();
+      opt.headers = Object.assign(opt.headers, { authorization: token });
+    }
+
+    opt.url = this.domain + opt.url;
+
+    return axios(opt).then((res) => ({
+      header: res.headers,
+      body: res.data,
+    }));
   }
 
   //OAuth
   //Hashkey
   hashkey(data) {
     const opt = {
-      url: domain + "/uapi/hashkey",
-      headers: {
-        "content-type": "application/json",
-        appkey,
-        appsecret,
-      },
+      url: "/uapi/hashkey",
+      headers: { "content-type": "application/json" },
       data,
       method: "POST",
     };
 
-    return request(opt);
+    return this.request(opt, (addAccNum = false), (addAuth = false));
+  }
+
+  async getHashkey(data) {
+    const res = await this.hashkey(data);
+    return res.body.HASH;
   }
 
   //접근토큰발급(P)
-  async issueToken() {
-    if (KoreaInvest.options.token) {
-      await discardToken(KoreaInvest.options.token);
-    }
+  issueToken() {
+    if (this.options.token) this.discardToken();
 
     const opt = {
-      url: domain + "/oauth2/tokenP",
+      url: "/oauth2/tokenP",
       data: {
         grant_type: "client_credentials",
-        appkey,
-        appsecret,
+        appkey: this.appkey,
+        appsecret: this.appsecret,
       },
       method: "POST",
     };
 
-    return request(opt);
+    return this.request(
+      opt,
+      (addKey = false),
+      (addAccNum = false),
+      (addContentType = false),
+      (addAuth = false)
+    );
   }
 
   //접근토큰폐기(P)
-  async discardToken(token = this.options.token) {
-    if (token === undefined) {
-      throw "token was undefined";
-    }
+  discardToken(token = this.options.token) {
+    if (token === undefined) throw "token was undefined";
+
     const opt = {
-      url: domain + "/oauth2/revokeP",
-      data: {
-        appkey,
-        appsecret,
-        token,
-      },
+      url: "/oauth2/revokeP",
+      data: { token, appkey: this.appkey, appsecret: this.appsecret },
       method: "POST",
     };
 
-    return request(opt);
+    return this.request(
+      opt,
+      (addKey = false),
+      (addAccNum = false),
+      (addContentType = false),
+      (addAuth = false)
+    );
   }
 
   //Domestic Stock Order
   //주식주문(현금)
-  async orderCash(ticker, type, orderType, qty, price) {
-    const data = {
-      CANO: accNumFront,
-      ACNT_PRDT_CD: accNumBack,
-      PDNO: ticker,
-      ORD_DVSN: orderType,
-      ORD_QTY: qty,
-      ORD_UNPR: price,
-    };
-    const hash = await hashkey(data);
-
+  orderCash(ticker, type, orderType, qty, price) {
     const opt = {
-      url: domain + "/uapi/domestic-stock/v1/trading/order-cash",
-      headers: {
-        "content-type": "application/json",
-        authorization: await token(),
-        appkey,
-        appsecret,
-        hashkey: hash,
+      url: "/uapi/domestic-stock/v1/trading/order-cash",
+      headers: {},
+      data: {
+        PDNO: ticker,
+        ORD_DVSN: orderType,
+        ORD_QTY: qty,
+        ORD_UNPR: price,
       },
-      data,
       method: "POST",
     };
 
-    if (type === "BUY") opt.headers.tr_id = isTest ? "VTTC0802U" : "TTTC0802U";
+    if (type === "BUY")
+      opt.headers.tr_id = this.isTest ? "VTTC0802U" : "TTTC0802U";
     else if (type === "SELL")
-      opt.headers.tr_id = isTest ? "VTTC0801U" : "TTTC0801U";
+      opt.headers.tr_id = this.isTest ? "VTTC0801U" : "TTTC0801U";
     else throw "type should be either BUY or SELL";
 
-    return request(opt);
+    return this.request(opt, (addHash = true));
   }
 
+  balance(viewBy, CTX_AREA_FK100 = null, CTX_AREA_NK100 = null) {
+    const opt = {
+      url: "/uapi/domestic-stock/v1/trading/inquire-balance",
+      headers: {
+        tr_id: this.isTest ? "VTTC8434R" : "TTTC8434R",
+      },
+      data: {
+        AFHR_FLPR_YN: "N",
+        INQR_DVSN: viewBy,
+        UNPR_DVSN: "01",
+        FUND_STTL_ICLD_YN: "N",
+        FNCG_AMT_AUTO_RDPT_YN: "N",
+        PRCS_DVSN: "00",
+      },
+      method: "GET",
+    };
+
+    if (CTX_AREA_FK100 && CTX_AREA_NK100) {
+      opt.headers.tr_cont = "N";
+      opt.data.CTX_AREA_FK100 = CTX_AREA_FK100;
+      opt.data.CTX_AREA_NK100 = CTX_AREA_NK100;
+    }
+
+    return this.request(opt);
+  }
+
+  possibleOrder(ticker, price, orderType) {
+    const opt = {
+      url: "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+      headers: {
+        tr_id: this.isTest,
+      },
+      data: {
+        PDNO: ticker,
+        ORD_UNPR: price,
+        ORD_DVSN: orderType,
+        CMA_EVLU_AMT_ICLD_YN: "N",
+        OVRS_ICLD_YN: "N",
+      },
+      method: "GET",
+    };
+
+    return this.request(opt);
+  }
+
+  getKline(ticker, interval, resume = false) {
+    const opt = {
+      url: "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+      headers: {
+        tr_id: "FHKST01010400",
+      },
+      data: {
+        FID_COND_MRKT_DIV_CODE: "J",
+        FID_INPUT_ISCD: ticker,
+        FID_PERIOD_DIV_CODE: interval,
+        FID_ORG_ADJ_PRC: "1",
+      },
+      method: "GET",
+    };
+    if (resume) opt.headers.tr_cont = "N";
+
+    return this.request(opt, (addAccNum = false));
+  }
+}
+
+class Client extends KoreaInvestmentAPI {
   MarketBuy(ticker, qty) {
     return orderCash(ticker, "BUY", "01", qty, "0");
   }
@@ -143,62 +247,6 @@ class KoreaInvestmentAPI {
   MarketSell(ticker, qty) {
     return orderCash(ticker, "SELL", "01", qty, "0");
   }
-
-  //주식주문(정정취소)
-  async RevokeOrder(KRXNum, orderNum, orderType, revokeType, qty, price, all) {
-    const data = {
-      CANO: accNumFront,
-      ACNT_PRDT_CD: accNumBack,
-      KRX_FWDG_ORD_ORGNO: KRXNum,
-      ORGN_ODNO: orderNum,
-      ORD_DVSN: orderType,
-      RVSE_CNCL_DVSN_CD: revokeType,
-      ORD_QTY: qty,
-      ORD_UNPR: price,
-      QTY_ALL_ORD_YN: all,
-    };
-
-    const hash = hashkey(data);
-    const opt = {
-      url: domain + "/uapi/domestic-stock/v1/trading/order-rvsecncl",
-      headers: {
-        "content-type": "	application/json",
-        authorization: await token(),
-        appkey,
-        appsecret,
-        tr_id: isTest ? "VTTC0803U" : "TTTC0803U",
-        hashkey: hash,
-      },
-      data,
-      method: "POST",
-    };
-
-    return request(opt);
-  }
-
-  //주식정정취소가능주문조회
-  RevokableOrder() {}
-
-  async OrderHistory(startDate, endDate, type) {
-    const data = {
-      CANO: accNumFront,
-      ACNT_PRDT_CD: accNumBack,
-      INQR_STRT_DT: startDate,
-      INQR_END_DT: endDate,
-      SLL_BUY_DVSN_CD: type,
-    };
-    const opt = {
-      url: domain + "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-      data: {
-        "content-type": "application/json",
-        authorization: await token(),
-        appkey,
-        appsecret,
-        tr_id,
-      },
-      method: "GET",
-    };
-  }
 }
 
-export default KoreaInvestmentAPI;
+export default Client;
