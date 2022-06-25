@@ -1,10 +1,11 @@
-import axios from "axios";
-import io from "socket.io-client";
+import WebSocket from "ws";
 
 class KoreaInvestmentAPI {
   constructor(APIKEY, SECRETKEY, accNumFront, accNumBack, options = {}) {
     const base = "https://openapi.koreainvestment.com:9443";
     const testnet = "https://openapivts.koreainvestment.com:29443";
+    const wsBase = "ws://ops.koreainvestment.com:21000";
+    const wsTestnet = "ws://ops.koreainvestment.com:31000";
 
     const default_options = {
       recvWindow: 1000,
@@ -23,6 +24,7 @@ class KoreaInvestmentAPI {
     this.options = Object.assign(default_options, options);
     this.isTest = this.options.test;
     this.options.domain = this.isTest ? testnet : base;
+    this.options.wsDomain = this.isTest ? wsTestnet : wsBase;
 
     this.appkey = this.options.APIKEY;
     this.appsecret = this.options.SECRETKEY;
@@ -88,6 +90,41 @@ class KoreaInvestmentAPI {
       header: res.headers,
       body: res.data,
     }));
+  }
+
+  connect(url, tr_id, tr_key) {
+    const obj = {
+      socket: WebSocket(this.options.wsDomain + url),
+
+      open: () => {
+        this.socket.send({
+          header: {
+            appkey: this.options.APIKEY,
+            appsecret: this.options.SECRETKEY,
+            custtype: "P",
+            tr_type: "1",
+            "content-type": "utf-8",
+          },
+          body: { input: { tr_id, tr_key } },
+        });
+      },
+
+      close: () => {
+        this.socket.send({
+          header: {
+            appkey: this.options.APIKEY,
+            appsecret: this.options.SECRETKEY,
+            custtype: "P",
+            tr_type: "2",
+            "content-type": "utf-8",
+          },
+          body: { input: { tr_id, tr_key } },
+        });
+        socket.close();
+      },
+    };
+
+    return obj;
   }
 
   //OAuth
@@ -237,6 +274,32 @@ class KoreaInvestmentAPI {
 
     return this.request(opt, (addAccNum = false));
   }
+
+  tradeStream(ticker) {
+    const socket = this.connect("/tryitout/H0STCNT0", "H0STCNT0", ticker);
+    socket.socket.on("message", () => {});
+  }
+
+  /*
+  openEventFunction = (event) => event,
+  closeEventFunction = (event) => event,
+  errorEventFunction = (event) => event,
+  messageEventFunction = (event) => event
+
+  
+  this.socket.addEventListener("close", (event) => {
+    closeEventFunction(event);
+  });
+  this.socket.addEventListener("open", (event) => {
+    openEventFunction(event);
+  });
+  this.socket.addEventListener("error", (event) => {
+    errorEventFunction(event);
+  });
+  this.socket.addEventListener("message", (event) => {
+    messageEventFunction(event);
+  });
+  */
 }
 
 class Client extends KoreaInvestmentAPI {
