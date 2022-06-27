@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import axios from "axios";
 
 class KoreaInvestmentAPI {
   constructor(APIKEY, SECRETKEY, accNumFront, accNumBack, options = {}) {
@@ -44,76 +45,96 @@ class KoreaInvestmentAPI {
   async getToken() {
     if (this.isTokenExpired() || this.options.token === undefined) {
       const res = await this.issueToken();
-      this.setToken(res.body.access_token, res.body.expire_in);
+      this.setToken(res.body.access_token, res.body.expires_in);
     }
     return this.options.token;
   }
 
-  request(
-    opt,
-    addKey = true,
-    addHash = false,
-    addAccNum = true,
-    addContentType = true,
-    addAuth = true
-  ) {
-    if (addKey)
-      opt.headers = Object.assign(opt.data, {
+  async request(obj, opt = {}) {
+    const option = Object.assign(
+      {
+        addKey: true,
+        addHash: false,
+        addAccNum: true,
+        addContentType: true,
+        addAuth: true,
+      },
+      opt
+    );
+
+    if (obj.data === undefined) obj.data = {};
+    if (obj.headers === undefined) obj.headers = {};
+
+    if (option.addKey)
+      obj.headers = Object.assign(obj.headers, {
         appkey: this.options.APIKEY,
         appsecret: this.options.SECRETKEY,
       });
 
-    if (addAccNum)
-      opt.data = Object.assign(opt.data, {
+    if (option.addAccNum)
+      obj.data = Object.assign(obj.data, {
         CANO: this.options.accNumFront,
         ACNT_PRDT_CD: this.options.accNumBack,
       });
 
-    if (addHash) {
-      const hash = this.getHashkey();
-      opt.headers = Object.assign(opt.headers, { hashkey: hash });
-    }
-
-    if (addContentType)
-      opt.headers = Object.assign(opt.headers, {
+    if (option.addContentType)
+      obj.headers = Object.assign(obj.headers, {
         "content-type": "application/json",
       });
 
-    if (addAuth) {
-      const token = this.getToken();
-      opt.headers = Object.assign(opt.headers, { authorization: token });
+    if (option.addAuth) {
+      const token = await this.getToken();
+      obj.headers = Object.assign(obj.headers, {
+        authorization: `Bearer ${token}`,
+      });
     }
 
-    opt.url = this.domain + opt.url;
+    if (option.addHash) {
+      const hash = await this.getHashkey(obj.data);
+      console.log(hash);
+      obj.headers = Object.assign(obj.headers, { hashkey: hash });
+    }
 
-    return axios(opt).then((res) => ({
-      header: res.headers,
-      body: res.data,
-    }));
+    obj.url = this.domain + obj.url;
+
+    console.log(obj);
+
+    return axios(obj)
+      .then((res) => ({
+        header: res.headers,
+        body: res.data,
+      }))
+      .catch((err) => {
+        console.log(err);
+      });
   }
 
   connect(url, tr_id, tr_key) {
-    const obj = {
-      socket: WebSocket(this.options.wsDomain + url),
+    const wsDomain = this.options.wsDomain;
+    const appkey = this.options.APIKEY,
+      appsecret = this.options.SECRETKEY;
 
-      open: () => {
+    const obj = function () {
+      this.socket = new WebSocket(wsDomain + url);
+
+      this.open = () => {
         this.socket.send({
           header: {
-            appkey: this.options.APIKEY,
-            appsecret: this.options.SECRETKEY,
+            appkey,
+            appsecret,
             custtype: "P",
             tr_type: "1",
             "content-type": "utf-8",
           },
           body: { input: { tr_id, tr_key } },
         });
-      },
+      };
 
-      close: () => {
+      this.close = () => {
         this.socket.send({
           header: {
-            appkey: this.options.APIKEY,
-            appsecret: this.options.SECRETKEY,
+            appkey,
+            appsecret,
             custtype: "P",
             tr_type: "2",
             "content-type": "utf-8",
@@ -121,23 +142,23 @@ class KoreaInvestmentAPI {
           body: { input: { tr_id, tr_key } },
         });
         socket.close();
-      },
+      };
     };
 
-    return obj;
+    return new obj();
   }
 
   //OAuth
   //Hashkey
   hashkey(data) {
-    const opt = {
+    const obj = {
       url: "/uapi/hashkey",
       headers: { "content-type": "application/json" },
       data,
       method: "POST",
     };
 
-    return this.request(opt, (addAccNum = false), (addAuth = false));
+    return this.request(obj, { addAccNum: false, addAuth: false });
   }
 
   async getHashkey(data) {
@@ -146,10 +167,10 @@ class KoreaInvestmentAPI {
   }
 
   //접근토큰발급(P)
-  issueToken() {
-    if (this.options.token) this.discardToken();
+  async issueToken() {
+    if (this.options.token) await this.discardToken();
 
-    const opt = {
+    const obj = {
       url: "/oauth2/tokenP",
       data: {
         grant_type: "client_credentials",
@@ -159,38 +180,36 @@ class KoreaInvestmentAPI {
       method: "POST",
     };
 
-    return this.request(
-      opt,
-      (addKey = false),
-      (addAccNum = false),
-      (addContentType = false),
-      (addAuth = false)
-    );
+    return this.request(obj, {
+      addKey: false,
+      addAccNum: false,
+      addContentType: false,
+      addAuth: false,
+    });
   }
 
   //접근토큰폐기(P)
-  discardToken(token = this.options.token) {
+  async discardToken(token = this.options.token) {
     if (token === undefined) throw "token was undefined";
 
-    const opt = {
+    const obj = {
       url: "/oauth2/revokeP",
       data: { token, appkey: this.appkey, appsecret: this.appsecret },
       method: "POST",
     };
 
-    return this.request(
-      opt,
-      (addKey = false),
-      (addAccNum = false),
-      (addContentType = false),
-      (addAuth = false)
-    );
+    return this.request(obj, {
+      addKey: false,
+      addAccNum: false,
+      addContentType: false,
+      addAuth: false,
+    });
   }
 
   //Domestic Stock Order
   //주식주문(현금)
-  orderCash(ticker, type, orderType, qty, price) {
-    const opt = {
+  async orderCash(ticker, type, orderType, qty, price) {
+    const obj = {
       url: "/uapi/domestic-stock/v1/trading/order-cash",
       headers: {},
       data: {
@@ -203,16 +222,24 @@ class KoreaInvestmentAPI {
     };
 
     if (type === "BUY")
-      opt.headers.tr_id = this.isTest ? "VTTC0802U" : "TTTC0802U";
+      obj.headers.tr_id = this.isTest ? "VTTC0802U" : "TTTC0802U";
     else if (type === "SELL")
-      opt.headers.tr_id = this.isTest ? "VTTC0801U" : "TTTC0801U";
+      obj.headers.tr_id = this.isTest ? "VTTC0801U" : "TTTC0801U";
     else throw "type should be either BUY or SELL";
 
-    return this.request(opt, (addHash = true));
+    return this.request(obj, { addHash: true });
   }
 
-  balance(viewBy, CTX_AREA_FK100 = null, CTX_AREA_NK100 = null) {
-    const opt = {
+  async balance(
+    viewBy,
+    CTX_AREA_FK100 = undefined,
+    CTX_AREA_NK100 = undefined
+  ) {
+    // "01" - 대출일별, "02" - 종목별
+    if (viewBy !== "01" && viewBy !== "02")
+      throw 'viewBy must be either "01" or "02"';
+
+    const obj = {
       url: "/uapi/domestic-stock/v1/trading/inquire-balance",
       headers: {
         tr_id: this.isTest ? "VTTC8434R" : "TTTC8434R",
@@ -224,21 +251,24 @@ class KoreaInvestmentAPI {
         FUND_STTL_ICLD_YN: "N",
         FNCG_AMT_AUTO_RDPT_YN: "N",
         PRCS_DVSN: "00",
+        OFL_YN: "N",
+        CTX_AREA_FK100: "",
+        CTX_AREA_NK100: "",
       },
       method: "GET",
     };
 
     if (CTX_AREA_FK100 && CTX_AREA_NK100) {
-      opt.headers.tr_cont = "N";
-      opt.data.CTX_AREA_FK100 = CTX_AREA_FK100;
-      opt.data.CTX_AREA_NK100 = CTX_AREA_NK100;
+      obj.headers.tr_cont = "N";
+      obj.data.CTX_AREA_FK100 = CTX_AREA_FK100;
+      obj.data.CTX_AREA_NK100 = CTX_AREA_NK100;
     }
 
-    return this.request(opt);
+    return this.request(obj);
   }
 
-  possibleOrder(ticker, price, orderType) {
-    const opt = {
+  async possibleOrder(ticker, price, orderType) {
+    const obj = {
       url: "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
       headers: {
         tr_id: this.isTest,
@@ -253,11 +283,11 @@ class KoreaInvestmentAPI {
       method: "GET",
     };
 
-    return this.request(opt);
+    return this.request(obj);
   }
 
-  getKline(ticker, interval, resume = false) {
-    const opt = {
+  async getKline(ticker, interval, resume = false) {
+    const obj = {
       url: "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
       headers: {
         tr_id: "FHKST01010400",
@@ -270,14 +300,31 @@ class KoreaInvestmentAPI {
       },
       method: "GET",
     };
-    if (resume) opt.headers.tr_cont = "N";
+    if (resume) obj.headers.tr_cont = "N";
 
-    return this.request(opt, (addAccNum = false));
+    return this.request(obj, { addAccNum: false });
   }
 
   tradeStream(ticker) {
+    let connected = false;
     const socket = this.connect("/tryitout/H0STCNT0", "H0STCNT0", ticker);
-    socket.socket.on("message", () => {});
+    socket.socket.on("message", (event) => {
+      console.log(event);
+    });
+
+    socket.socket.on("open", (event) => {
+      console.log("OPEN");
+    });
+
+    socket.socket.on("error", (err) => {
+      console.log("ERROR");
+    });
+
+    socket.socket.on("close", (event) => {
+      console.log(event);
+    });
+
+    return socket;
   }
 
   /*
@@ -303,12 +350,12 @@ class KoreaInvestmentAPI {
 }
 
 class Client extends KoreaInvestmentAPI {
-  MarketBuy(ticker, qty) {
-    return orderCash(ticker, "BUY", "01", qty, "0");
+  async MarketBuy(ticker, qty) {
+    return await this.orderCash(ticker, "BUY", "01", qty, "0");
   }
 
-  MarketSell(ticker, qty) {
-    return orderCash(ticker, "SELL", "01", qty, "0");
+  async MarketSell(ticker, qty) {
+    return await this.orderCash(ticker, "SELL", "01", qty, "0");
   }
 }
 
