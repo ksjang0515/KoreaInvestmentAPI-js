@@ -91,13 +91,10 @@ class KoreaInvestmentAPI {
 
     if (option.addHash) {
       const hash = await this.getHashkey(obj.data);
-      console.log(hash);
       obj.headers = Object.assign(obj.headers, { hashkey: hash });
     }
 
     obj.url = this.domain + obj.url;
-
-    console.log(obj);
 
     return axios(obj)
       .then((res) => ({
@@ -240,11 +237,18 @@ class KoreaInvestmentAPI {
       throw 'viewBy must be either "01" or "02"';
 
     const obj = {
-      url: "/uapi/domestic-stock/v1/trading/inquire-balance",
+      url:
+        this.options.domain + "/uapi/domestic-stock/v1/trading/inquire-balance",
       headers: {
+        "content-type": "application/json",
+        authorization: await this.getToken(),
+        appkey: this.appkey,
+        appsecret: this.appsecret,
         tr_id: this.isTest ? "VTTC8434R" : "TTTC8434R",
       },
-      data: {
+      params: {
+        CANO: this.options.accNumFront,
+        ACNT_PRDT_CD: this.options.accNumBack,
         AFHR_FLPR_YN: "N",
         INQR_DVSN: viewBy,
         UNPR_DVSN: "01",
@@ -260,11 +264,18 @@ class KoreaInvestmentAPI {
 
     if (CTX_AREA_FK100 && CTX_AREA_NK100) {
       obj.headers.tr_cont = "N";
-      obj.data.CTX_AREA_FK100 = CTX_AREA_FK100;
-      obj.data.CTX_AREA_NK100 = CTX_AREA_NK100;
+      obj.params.CTX_AREA_FK100 = CTX_AREA_FK100;
+      obj.params.CTX_AREA_NK100 = CTX_AREA_NK100;
     }
 
-    return this.request(obj);
+    return axios(obj)
+      .then((res) => ({
+        header: res.headers,
+        body: res.data,
+      }))
+      .catch((err) => {
+        console.log(err);
+      });
   }
 
   async possibleOrder(ticker, price, orderType) {
