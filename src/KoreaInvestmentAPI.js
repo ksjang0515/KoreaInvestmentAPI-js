@@ -236,12 +236,14 @@ class KoreaInvestmentAPI {
     if (viewBy !== "01" && viewBy !== "02")
       throw 'viewBy must be either "01" or "02"';
 
+    const token = await this.getToken();
+
     const obj = {
       url:
         this.options.domain + "/uapi/domestic-stock/v1/trading/inquire-balance",
       headers: {
         "content-type": "application/json",
-        authorization: await this.getToken(),
+        authorization: `Bearer ${token}`,
         appkey: this.appkey,
         appsecret: this.appsecret,
         tr_id: this.isTest ? "VTTC8434R" : "TTTC8434R",
@@ -267,6 +269,8 @@ class KoreaInvestmentAPI {
       obj.params.CTX_AREA_FK100 = CTX_AREA_FK100;
       obj.params.CTX_AREA_NK100 = CTX_AREA_NK100;
     }
+
+    console.log(obj);
 
     return axios(obj)
       .then((res) => ({
